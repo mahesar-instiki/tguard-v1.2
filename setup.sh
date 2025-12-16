@@ -165,6 +165,7 @@ install_module() {
     sudo chown -R 1000:1000 shuffle-database
     sudo swapoff -a
     sudo docker compose up -d
+    sudo docker restart shuffle-opensearch
     echo -e "\e[1;32mShuffle deployment initiated.\e[0m"
     
     # Check Shuffle Status
