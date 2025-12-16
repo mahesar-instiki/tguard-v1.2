@@ -120,7 +120,6 @@ install_module() {
     # --- 2. Installing Wazuh (SIEM) & Deploying Agent ---
     echo -e "\e[1;36m--> Installing Wazuh...\e[0m"
     cd wazuh-docker/single-node
-    sudo docker network create shared-network &>/dev/null # Create network if not exists
     sudo docker compose -f generate-indexer-certs.yml run --rm generator
     sudo docker compose up -d
 
@@ -158,31 +157,7 @@ install_module() {
 
     cd ../..
 
-    # --- 3. Installing DFIR-IRIS (Incident Response Platform) ---
-    echo -e "\n\e[1;36m--> Installing DFIR-IRIS...\e[0m"
-    cd iris-web
-    sudo docker compose build
-    sudo docker compose up -d
-    echo -e "\e[1;32mDFIR-IRIS deployment initiated.\e[0m"
-
-    # Check DFIR-IRIS Status
-    echo -e "\e[1;34m[INFO] Verifying DFIR-IRIS container status...\e[0m"
-    iris_containers=("iriswebapp_nginx" "iriswebapp_worker" "iriswebapp_app" "iriswebapp_db" "iriswebapp_rabbitmq")
-    for container in "${iris_containers[@]}"; do
-        sleep 10
-        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
-        if [ "$running_status" != "true" ]; then
-            echo -e "\e[1;31m[ERROR] DFIR-IRIS installation failed: Container '$container' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
-            sudo docker logs "$container" --tail 50
-            exit 1
-        fi
-    done
-    echo
-    echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
-    cd ..
-
-    # --- 4. Installing Shuffle (SOAR) ---
+    # --- 3. Installing Shuffle (SOAR) ---
     echo -e "\n\e[1;36m--> Installing Shuffle...\e[0m"
     cd Shuffle
     mkdir -p shuffle-database 
@@ -206,6 +181,30 @@ install_module() {
     done
     echo
     echo -e "\e[1;32mShuffle deployment is successful and all core containers are running.\e[0m"
+    cd ..
+    
+    # --- 4. Installing DFIR-IRIS (Incident Response Platform) ---
+    echo -e "\n\e[1;36m--> Installing DFIR-IRIS...\e[0m"
+    cd iris-web
+    sudo docker compose build
+    sudo docker compose up -d
+    echo -e "\e[1;32mDFIR-IRIS deployment initiated.\e[0m"
+
+    # Check DFIR-IRIS Status
+    echo -e "\e[1;34m[INFO] Verifying DFIR-IRIS container status...\e[0m"
+    iris_containers=("iriswebapp_nginx" "iriswebapp_worker" "iriswebapp_app" "iriswebapp_db" "iriswebapp_rabbitmq")
+    for container in "${iris_containers[@]}"; do
+        sleep 10
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] DFIR-IRIS installation failed: Container '$container' is not running.\e[0m"
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs "$container" --tail 50
+            exit 1
+        fi
+    done
+    echo
+    echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
     cd ..
 
     echo
