@@ -240,7 +240,7 @@ install_module() {
     printf "  ${BLUE}%-18s ${YELLOW}%-49s ${GREEN}\n" "MISP (Threat Intel)" "https://$IP_ADDRESS:1443"
     printf "  ${WHITE}%-18s ${NC}%-49s ${GREEN}\n" " ├─ Username" "admin@admin.test"
     printf "  ${WHITE}%-18s ${NC}%-49s ${GREEN}\n" " └─ Password" "admin"
-    printf "${GREEN}+----------------------------------------------------------------------+\n\n"
+    printf "${GREEN}+----------------------------------------------------------------------+\n"
 
     # Wazuh Details
     printf "  ${BLUE}%-18s ${YELLOW}%-49s ${GREEN}\n" "Wazuh (SIEM)" "https://$IP_ADDRESS"
