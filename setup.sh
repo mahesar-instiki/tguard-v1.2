@@ -93,7 +93,7 @@ install_module() {
     echo -e "\e[1;36m--> Installing MISP...\e[0m"
     cd misp-docker
     sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
-    sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8080|' template.env
+    sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
     sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
     cp template.env .env
     sudo docker compose up -d
@@ -188,7 +188,7 @@ install_module() {
     # --- 4. Installing DFIR-IRIS (Incident Response Platform) ---
     echo -e "\n\e[1;36m--> Installing DFIR-IRIS...\e[0m"
     cd iris-web
-    sudo docker compose build
+    sudo docker compose pull
     sudo docker compose up -d
     echo -e "\e[1;32mDFIR-IRIS deployment initiated.\e[0m"
 
