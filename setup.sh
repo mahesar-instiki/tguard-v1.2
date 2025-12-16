@@ -189,9 +189,9 @@ install_module() {
     cp template.env .env
     sudo docker compose up -d
     echo -e "\e[1;32mMISP deployment initiated.\e[0m"
-    sudo docker start misp-docker-misp-core-1
-    sudo docker start misp-docker-misp-db-1
-    sudo docker start misp-docker-misp-modules-1
+    sudo docker restart misp-docker-misp-db-1
+    sudo docker restart misp-docker-misp-core-1
+    sudo docker restart misp-docker-misp-modules-1
     # Check MISP Status
     echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
     misp_containers=("misp-docker-misp-core-1" "misp-docker-misp-modules-1" "misp-docker-mail-1" "misp-docker-redis-1" "misp-docker-db-1")
