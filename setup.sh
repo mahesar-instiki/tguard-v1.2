@@ -89,36 +89,7 @@ install_module() {
     echo -e "\e[1;34m[INFO] Using IP Address \e[1;33m$IP_ADDRESS\e[1;34m for all subsequent configurations.\e[0m\n"
 
 
-    # --- 1. Installing MISP (Threat Intelligence) ---
-    echo -e "\e[1;36m--> Installing MISP...\e[0m"
-    cd misp-docker
-    sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
-    sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
-    sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
-    cp template.env .env
-    sudo docker compose up -d
-    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
-    sudo docker start misp-docker-misp-core-1
-    sudo docker start misp-docker-misp-db-1
-    sudo docker start misp-docker-misp-modules-1
-    # Check MISP Status
-    echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
-    misp_containers=("misp-docker-misp-core-1" "misp-docker-misp-modules-1" "misp-docker-mail-1" "misp-docker-redis-1" "misp-docker-db-1")
-    for container in "${misp_containers[@]}"; do
-        sleep 10
-        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
-        if [ "$running_status" != "true" ]; then
-            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$container' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
-            sudo docker logs "$container" --tail 50
-            exit 1
-        fi
-    done
-    echo
-    echo -e "\e[1;32m MISP deployment is successful and all core containers are running.\e[0m"
-    cd ..
-
-    # --- 2. Installing Wazuh (SIEM) & Deploying Agent ---
+    # --- 1. Installing Wazuh (SIEM) & Deploying Agent ---
     echo -e "\e[1;36m--> Installing Wazuh...\e[0m"
     cd wazuh-docker/single-node
     sudo docker compose -f generate-indexer-certs.yml run --rm generator
@@ -158,7 +129,7 @@ install_module() {
 
     cd ../..
 
-    # --- 3. Installing Shuffle (SOAR) ---
+    # --- 2. Installing Shuffle (SOAR) ---
     echo -e "\n\e[1;36m--> Installing Shuffle...\e[0m"
     cd Shuffle
     mkdir -p shuffle-database 
@@ -185,7 +156,7 @@ install_module() {
     echo -e "\e[1;32mShuffle deployment is successful and all core containers are running.\e[0m"
     cd ..
     
-    # --- 4. Installing DFIR-IRIS (Incident Response Platform) ---
+    # --- 3. Installing DFIR-IRIS (Incident Response Platform) ---
     echo -e "\n\e[1;36m--> Installing DFIR-IRIS...\e[0m"
     cd iris-web
     sudo docker compose pull
@@ -208,6 +179,36 @@ install_module() {
     echo
     echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
     cd ..
+
+   # --- 4. Installing MISP (Threat Intelligence) ---
+    echo -e "\e[1;36m--> Installing MISP...\e[0m"
+    cd misp-docker
+    sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
+    sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
+    sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
+    cp template.env .env
+    sudo docker compose up -d
+    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
+    sudo docker start misp-docker-misp-core-1
+    sudo docker start misp-docker-misp-db-1
+    sudo docker start misp-docker-misp-modules-1
+    # Check MISP Status
+    echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
+    misp_containers=("misp-docker-misp-core-1" "misp-docker-misp-modules-1" "misp-docker-mail-1" "misp-docker-redis-1" "misp-docker-db-1")
+    for container in "${misp_containers[@]}"; do
+        sleep 10
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$container' is not running.\e[0m"
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs "$container" --tail 50
+            exit 1
+        fi
+    done
+    echo
+    echo -e "\e[1;32m MISP deployment is successful and all core containers are running.\e[0m"
+    cd ..
+    
 
     echo
     echo -e "\e[1;32m Step 2 Completed: All T-Guard SOC packages have been deployed. \e[0m"
