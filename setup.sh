@@ -298,7 +298,7 @@ integrate_module() {
     echo -e "\n\e[1;36m--- Configuring VirusTotal <-> Wazuh --- \e[0m"
     # Agent Setup
     USECASE_DIR="$(pwd)/usecase/webdeface"
-    CONFIG_AGENT="$(pwd)/wazuh-docker/sinlge-node/custom-integrations/add_vtwazuh_config-agent.conf"
+    CONFIG_AGENT="$(pwd)/wazuh-docker/single-node/custom-integrations/add_vtwazuh_config-agent.conf"
     cd wazuh-docker/single-node/custom-integrations
     sed -i "s|<directories report_changes=\"yes\" whodata=\"yes\" realtime=\"yes\">\$USECASE_DIR</directories>|<directories report_changes=\"yes\" whodata=\"yes\" realtime=\"yes\">$USECASE_DIR</directories>|" "$CONFIG_AGENT"
     sudo bash -c "cat add_vtwazuh_config-agent.conf >> /var/ossec/etc/ossec.conf"
