@@ -317,7 +317,7 @@ integrate_module() {
     sudo cp local_rules.xml /var/lib/docker/volumes/single-node_wazuh_etc/_data/rules/local_rules.xml
     sudo docker exec -ti single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
     sudo docker exec -ti single-node-wazuh.manager-1 chmod 550 /var/ossec/etc/rules/local_rules.xml
-    cd wazuh-docker/single-node && sudo docker compose restart && cd ../..
+    cd .. && sudo docker compose restart && cd ../..
     echo -e "\e[1;32m VirusTotal-Wazuh integration complete.\e[0m"
     echo
 
@@ -328,7 +328,7 @@ integrate_module() {
     read -r SHUFFLE_URL
     sed -i "s|<hook_url>.*</hook_url>|<hook_url>$SHUFFLE_URL</hook_url>|" "add_shufflewazuh_config.conf"
     cat add_shufflewazuh_config.conf >> ../config/wazuh_cluster/wazuh_manager.conf
-    cd wazuh-docker/single-node && sudo docker compose restart && cd ../..
+    cd .. && sudo docker compose restart && cd ../..
     echo -e "\e[1;32m Shuffle-Wazuh integration complete.\e[0m"
     echo
     
