@@ -45,7 +45,7 @@ services:
       - ENVIRONMENT_NAME=Shuffle
       - ORG_ID=Shuffle
       - BASE_URL=http://${OUTER_HOSTNAME}:5001
-      - DOCKER_API_VERSION=1.40
+      - DOCKER_API_VERSION=1.44
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SHUFFLE_PASS_WORKER_PROXY=${SHUFFLE_PASS_WORKER_PROXY}
@@ -53,7 +53,6 @@ services:
       - SHUFFLE_APP_REPLICAS=${SHUFFLE_APP_REPLICAS}
       - SHUFFLE_STATS_DISABLED=true
       - SHUFFLE_LOGS_DISABLED=true
-      - SHUFFLE_SWARM_CONFIG=run
       - CLEANUP=false
       - SHUFFLE_WORKER_IMAGE=ghcr.io/shuffle/shuffle-worker:latest
     env_file: .env
