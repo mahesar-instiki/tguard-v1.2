@@ -15,6 +15,17 @@ print_version_line() {
   echo -e "\e[1;35mT-Guard Version ${TGUARD_VERSION}\e[0m"
 }
 
+print_step_header() {
+  # usage: print_step_header "Installing Wazuh (SIEM)"
+  echo
+  echo -e "\e[1;32m=================================================================\e[0m"
+  echo -e "\e[1;32m T-Guard SOC Package — $1 \e[0m"
+  print_version_line
+  echo -e "\e[1;32m=================================================================\e[0m"
+  echo
+}
+
+
 # Banner
 print_banner() {
     echo -e "\n\e[1;38;2;255;69;0m"
@@ -24,9 +35,9 @@ print_banner() {
     echo "|-----o-----||       |    | /_____/ \    \_\  \  |  // __ \|  | \\/ /_/ |   "
     echo ":     |     ::       |____|          \______  /____/(____  /__|  \____ |    "
     echo " \    |    //                               \/           \/           \/    "
-    echo "  '.__|__.'          Start Your Defence."
-    echo "                        Build Your Fortress."
-    print_version_line
+    echo "  '.__|__.'          			Start Your Defence."
+    echo "                        	        Build Your Fortress."
+    echo "                         		T-Guard Version 1.2"
     echo -e "\e[0m"
 }
 
@@ -39,8 +50,8 @@ update_install_pre() {
     echo
     sudo apt-get update -y
     sudo apt-get upgrade -y
-    sudo apt-get install -y whiptail jq
     sudo apt-get install wget curl nano git unzip nodejs -y
+    sudo apt install -y whiptail jq
     echo
     echo -e "\e[1;36m--> Installing Docker...\e[0m"
     echo
@@ -107,7 +118,7 @@ install_module() {
 
 
     # --- 1. Installing Wazuh (SIEM) & Deploying Agent ---
-    echo -e "\e[1;36m--> Installing Wazuh...\e[0m"
+    print_step_header "Installing Wazuh (SIEM)"
     cd wazuh-docker/single-node
     sudo docker compose -f generate-indexer-certs.yml run --rm generator
     sudo docker compose up -d
@@ -147,7 +158,8 @@ install_module() {
     cd ../..
 
     # --- 2. Installing Shuffle (SOAR) ---
-    echo -e "\n\e[1;36m--> Installing Shuffle...\e[0m"
+    print_step_header "Installing Shuffle (SOAR)"
+  
     cd Shuffle
     mkdir -p shuffle-database 
     sudo chown -R 1000:1000 shuffle-database
@@ -174,7 +186,7 @@ install_module() {
     cd ..
     
     # --- 3. Installing DFIR-IRIS (Incident Response Platform) ---
-    echo -e "\n\e[1;36m--> Installing DFIR-IRIS...\e[0m"
+    print_step_header "Installing DFIR-IRIS (Incident Response)"
     cd iris-web
     sudo docker compose pull
     sudo docker compose up -d     
@@ -193,15 +205,12 @@ install_module() {
             exit 1
         fi
     done
-    sudo docker restart iriswebapp_app
-    sudo docker restart iriswebapp_db
-    sudo docker restart iriswebapp_worker
     echo
     echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
     cd ..
 
    # --- 4. Installing MISP (Threat Intelligence) ---
-    echo -e "\e[1;36m--> Installing MISP...\e[0m"
+    print_step_header "Installing MISP (Threat Intelligence)"
     cd misp-docker
     sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
     sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
