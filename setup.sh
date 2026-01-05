@@ -1,5 +1,4 @@
 #!/bin/bash
-set -euo pipefail
 
 # =========================
 # T-Guard Version
@@ -16,36 +15,7 @@ print_version_line() {
   echo -e "\e[1;35mT-Guard Version ${TGUARD_VERSION}\e[0m"
 }
 
-print_step_header() {
-  # usage: print_step_header "Installing Wazuh (SIEM)"
-  echo
-  echo -e "\e[1;32m=================================================================\e[0m"
-  echo -e "\e[1;32m T-Guard SOC Package — $1 \e[0m"
-  print_version_line
-  echo -e "\e[1;32m=================================================================\e[0m"
-  echo
-}
-
-die() { echo -e "\e[1;31m[ERROR]\e[0m $*" >&2; exit 1; }
-info() { echo -e "\e[1;34m[INFO]\e[0m  $*"; }
-ok() { echo -e "\e[1;32m[OK]\e[0m    $*"; }
-
-need_dir() { [[ -d "$1" ]] || die "Direktori tidak ditemukan: $1"; }
-need_file() { [[ -f "$1" ]] || die "File tidak ditemukan: $1"; }
-
-backup_if_exists() {
-  local f="$1"
-  if [[ -f "$f" ]]; then
-    local ts
-    ts="$(date +%Y%m%d-%H%M%S)"
-    sudo cp -f "$f" "${f}.bak.${ts}"
-    info "Backup dibuat: ${f}.bak.${ts}"
-  fi
-}
-
-# =========================
 # Banner
-# =========================
 print_banner() {
     echo -e "\n\e[1;38;2;255;69;0m"
     echo "|.___---___.||     ___________        ________                       .___   "
@@ -60,212 +30,217 @@ print_banner() {
     echo -e "\e[0m"
 }
 
-# =========================
-# Step 1: Update & prereqs
-# =========================
+# Function for Update System and Install Prerequisites
 update_install_pre() {
-    print_step_header "Step 1: Update System & Install Prerequisites"
-
-    info "Updating system & installing prerequisites..."
+    echo
+    echo -e "\e[1;32m -- Step 1: Update System and Install Prerequisites -- \e[0m"
+    echo
+    echo -e "\e[1;36m--> Updating System and Install Prerequisites...\e[0m"
+    echo
     sudo apt-get update -y
     sudo apt-get upgrade -y
-    sudo apt-get install -y wget curl nano git unzip nodejs jq
-
-    info "Installing Docker (if not installed)..."
-    if command -v docker >/dev/null 2>&1; then
-        ok "Docker already installed."
-    else
-        curl -fsSL https://get.docker.com -o get-docker.sh
-        sudo sh get-docker.sh
-        sudo systemctl enable docker.service
-        sudo systemctl enable containerd.service
-        ok "Docker installed & enabled."
-    fi
-
-    ok "Step 1 Completed."
+    sudo apt-get install -y whiptail jq
+    sudo apt-get install wget curl nano git unzip nodejs -y
+    echo
+    echo -e "\e[1;36m--> Installing Docker...\e[0m"
+    echo
+    # Check if Docker is installed
+        if command -v docker > /dev/null; then
+            echo "Docker is already installed."
+        else
+            # Install Docker
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            sudo systemctl enable docker.service && sudo systemctl enable containerd.service
+        fi
+    echo
+    echo -e "\e[1;32m Step 1 Completed \e[0m"
 }
 
-# =========================
-# Step 2: Install modules
-# Urutan sesuai script T-Guard new version (yang Anda simpan):
-# 1) Wazuh -> 2) Shuffle -> 3) IRIS -> 4) MISP
-# =========================
+# Function for Install all module: MISP, Wazuh, IRIS, Shuffle
 install_module() {
-    print_step_header "Step 2: Install T-Guard SOC Package"
+    echo
+    echo -e "\e[1;32m -- Step 2: Install T-Guard SOC Package -- \e[0m"
+    echo
 
-    # --- Network env selection (sekali) ---
+    # --- Initial Network Configuration ---    
+    # Ask the user for the network environment just once.
     echo "Please select the network environment for this installation."
     PS3=$'\nChoose an option: '
-    select network_env in \
-      "Private Network (local VM: VirtualBox, VMware, etc.)" \
-      "Public Network (cloud server: GCP, AWS, Azure, etc.)" \
-      "Back"; do
+    select network_env in "Private Network (local VM: VirtualBox, VMware, etc.)" "Public Network (cloud server: GCP, AWS, Azure, etc.)" "Back"; do
         case $REPLY in
             1)
-                IP_ADDRESS="$(hostname -I | awk '{print $1}')"
-                echo -e "\n\e[1;34m[INFO] Private IP Address:\e[1;33m $IP_ADDRESS\e[0m"
+                # Get the primary private IP address
+                IP_ADDRESS=$(hostname -I | awk '{print $1}')
+                echo
+                echo -e "\e[1;34m[INFO] Private IP Address:\e[1;33m $IP_ADDRESS\e[0m"
                 break
                 ;;
+
             2)
-                IP_ADDRESS="$(curl -s ip.me -4 || true)"
-                echo -e "\n\e[1;34m[INFO] Public IP Address:\e[1;33m $IP_ADDRESS\e[0m"
+                # Get the public IP address
+                IP_ADDRESS=$(curl -s ip.me -4)
+                echo
+                echo -e "\e[1;34m[INFO] Public IP Address:\e[1;33m $IP_ADDRESS\e[0m"
                 break
                 ;;
+
             3)
                 echo "back to main menu..."
-                return
+                return # Exits the function and goes back to the main script menu
                 ;;
+
             *)
                 echo "Invalid option. Please try again."
                 ;;
+
         esac
     done
 
-    [[ -n "${IP_ADDRESS:-}" ]] || die "Could not determine IP address. Aborting installation."
-    echo -e "\n\e[1;34m[INFO] Using IP Address \e[1;33m$IP_ADDRESS\e[1;34m for all subsequent configurations.\e[0m\n"
+    # Validate that an IP address was successfully retrieved
+    if [ -z "$IP_ADDRESS" ]; then
+        echo -e "\e[1;31m[ERROR] Could not determine IP address. Aborting installation.\e[0m"
+        return
+    fi
 
-    # -------------------------
-    # 1) Wazuh
-    # -------------------------
-    print_step_header "Installing Wazuh (SIEM)"
+    echo -e "\e[1;34m[INFO] Using IP Address \e[1;33m$IP_ADDRESS\e[1;34m for all subsequent configurations.\e[0m\n"
 
-    need_dir "${ROOT_DIR}/wazuh-docker/single-node"
-    pushd "${ROOT_DIR}/wazuh-docker/single-node" >/dev/null
 
+    # --- 1. Installing Wazuh (SIEM) & Deploying Agent ---
+    echo -e "\e[1;36m--> Installing Wazuh...\e[0m"
+    cd wazuh-docker/single-node
     sudo docker compose -f generate-indexer-certs.yml run --rm generator
     sudo docker compose up -d
 
+    # Check Wazuh Status
     containers=("single-node-wazuh.dashboard-1" "single-node-wazuh.manager-1" "single-node-wazuh.indexer-1")
-    for c in "${containers[@]}"; do
-        running_status="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || true)"
-        if [[ "$running_status" != "true" ]]; then
-            echo -e "\e[1;31m[ERROR] Wazuh installation failed: Container '$c' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $c:\e[0m"
-            sudo docker logs "$c" --tail 80 || true
-            popd >/dev/null
+    for container in "${containers[@]}"; do
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' $container 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] Wazuh installation failed: Container '$container' is not running.\e[0m"
+            # Attempt to show logs for debugging
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs $container --tail 50
             exit 1
         fi
     done
-    ok "Wazuh core containers running."
+    echo -e "\e[1;32mYour Wazuh installation is successful and all core containers are running.\e[0m"
 
-    # Auto deploy agent (host)
-    info "Automatically deploying Wazuh Agent on host..."
-    wazuh_version="$(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep '^wazuh/wazuh-dashboard:' | head -n 1 | cut -d':' -f2 || true)"
-    [[ -n "$wazuh_version" ]] || die "Could not determine Wazuh version from Docker images."
+    # Deploy Wazuh Agent automatically
+    echo -e "\e[1;36m--> Automatically deploying Wazuh Agent...\e[0m"
+    wazuh_version=$(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep '^wazuh/wazuh-dashboard:' | head -n 1 | cut -d':' -f2)
+    
+    if [ -z "$wazuh_version" ]; then
+        echo -e "\e[1;31m[ERROR] Could not determine Wazuh version from Docker images.\e[0m"
+        exit 1
+    fi
 
-    wget -q "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${wazuh_version}-1_amd64.deb" -O wazuh-agent.deb
-
+    wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${wazuh_version}-1_amd64.deb -O wazuh-agent.deb
+    
+    # Install using the pre-configured IP and agent name
     sudo WAZUH_MANAGER="$IP_ADDRESS" WAZUH_AGENT_NAME="001-tguard-agent" dpkg -i ./wazuh-agent.deb
     sudo systemctl daemon-reload
     sudo systemctl enable wazuh-agent
     sudo systemctl start wazuh-agent
-    ok "Wazuh Agent deployed successfully."
+    echo -e "\e[1;32mWazuh Agent deployed successfully.\e[0m"
 
-    popd >/dev/null
+    cd ../..
 
-    # -------------------------
-    # 2) Shuffle
-    # -------------------------
-    print_step_header "Installing Shuffle (SOAR)"
-
-    need_dir "${ROOT_DIR}/Shuffle"
-    pushd "${ROOT_DIR}/Shuffle" >/dev/null
-
-    mkdir -p shuffle-database
+    # --- 2. Installing Shuffle (SOAR) ---
+    echo -e "\n\e[1;36m--> Installing Shuffle...\e[0m"
+    cd Shuffle
+    mkdir -p shuffle-database 
     sudo chown -R 1000:1000 shuffle-database
-    sudo swapoff -a || true
-
+    sudo swapoff -a
     sudo docker compose up -d
-    sudo docker restart shuffle-opensearch || true
-
+    sudo docker restart shuffle-opensearch
+    echo -e "\e[1;32mShuffle deployment initiated.\e[0m"
+    
+    # Check Shuffle Status
+    echo -e "\e[1;34m[INFO] Verifying Shuffle container status...\e[0m"
     shuffle_containers=("shuffle-backend" "shuffle-orborus" "shuffle-frontend")
-    for c in "${shuffle_containers[@]}"; do
+    for container in "${shuffle_containers[@]}"; do
         sleep 10
-        running_status="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || true)"
-        if [[ "$running_status" != "true" ]]; then
-            echo -e "\e[1;31m[ERROR] Shuffle installation failed: Container '$c' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $c:\e[0m"
-            sudo docker logs "$c" --tail 80 || true
-            popd >/dev/null
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] Shuffle installation failed: Container '$container' is not running.\e[0m"
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs "$container" --tail 50
             exit 1
         fi
     done
-
-    ok "Shuffle core containers running."
-    popd >/dev/null
-
-    # -------------------------
-    # 3) DFIR-IRIS
-    # -------------------------
-    print_step_header "Installing DFIR-IRIS (Incident Response)"
-
-    need_dir "${ROOT_DIR}/iris-web"
-    pushd "${ROOT_DIR}/iris-web" >/dev/null
-
+    echo
+    echo -e "\e[1;32mShuffle deployment is successful and all core containers are running.\e[0m"
+    cd ..
+    
+    # --- 3. Installing DFIR-IRIS (Incident Response Platform) ---
+    echo -e "\n\e[1;36m--> Installing DFIR-IRIS...\e[0m"
+    cd iris-web
     sudo docker compose pull
-    sudo docker compose up -d
+    sudo docker compose up -d     
+    echo -e "\e[1;32mDFIR-IRIS deployment initiated.\e[0m"
 
+    # Check DFIR-IRIS Status
+    echo -e "\e[1;34m[INFO] Verifying DFIR-IRIS container status...\e[0m"
     iris_containers=("iriswebapp_nginx" "iriswebapp_worker" "iriswebapp_app" "iriswebapp_db" "iriswebapp_rabbitmq")
-    for c in "${iris_containers[@]}"; do
+    for container in "${iris_containers[@]}"; do
         sleep 10
-        running_status="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || true)"
-        if [[ "$running_status" != "true" ]]; then
-            echo -e "\e[1;31m[ERROR] DFIR-IRIS installation failed: Container '$c' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $c:\e[0m"
-            sudo docker logs "$c" --tail 80 || true
-            popd >/dev/null
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] DFIR-IRIS installation failed: Container '$container' is not running.\e[0m"
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs "$container" --tail 50
             exit 1
         fi
     done
+    sudo docker restart iriswebapp_app
+    sudo docker restart iriswebapp_db
+    sudo docker restart iriswebapp_worker
+    echo
+    echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
+    cd ..
 
-    ok "DFIR-IRIS core containers running."
-    popd >/dev/null
-
-    # -------------------------
-    # 4) MISP
-    # -------------------------
-    print_step_header "Installing MISP (Threat Intelligence)"
-
-    need_dir "${ROOT_DIR}/misp-docker"
-    pushd "${ROOT_DIR}/misp-docker" >/dev/null
-
-    need_file "${ROOT_DIR}/misp-docker/template.env"
-
-    sed -i "s|BASE_URL=.*|BASE_URL='https://${IP_ADDRESS}:1443'|" template.env
+   # --- 4. Installing MISP (Threat Intelligence) ---
+    echo -e "\e[1;36m--> Installing MISP...\e[0m"
+    cd misp-docker
+    sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
     sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
     sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
     cp template.env .env
-
-    sudo docker compose up -d 2>/dev/null || true
-
-    # Restart containers (sesuai versi new script Anda)
-    sudo docker restart misp-docker-db-1 || true
-    sudo docker restart misp-docker-misp-core-1 || true
-    sudo docker restart misp-docker-misp-modules-1 || true
-
+    sudo docker compose up -d 2>/dev/null
+    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
+    sudo docker restart misp-docker-db-1
+    sudo docker restart misp-docker-misp-core-1
+    sudo docker restart misp-docker-misp-modules-1
+    # Check MISP Status
+    echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
     misp_containers=("misp-docker-misp-core-1" "misp-docker-misp-modules-1" "misp-docker-mail-1" "misp-docker-redis-1" "misp-docker-db-1")
-    for c in "${misp_containers[@]}"; do
+    for container in "${misp_containers[@]}"; do
         sleep 10
-        running_status="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || true)"
-        if [[ "$running_status" != "true" ]]; then
-            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$c' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $c:\e[0m"
-            sudo docker logs "$c" --tail 80 || true
-            popd >/dev/null
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$container' is not running.\e[0m"
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs "$container" --tail 50
             exit 1
         fi
     done
+    echo
+    echo -e "\e[1;32m MISP deployment is successful and all core containers are running.\e[0m"
+    cd ..
+    
 
-    ok "MISP core containers running."
-    popd >/dev/null
+    echo
+    echo -e "\e[1;32m Step 2 Completed: All T-Guard SOC packages have been deployed. \e[0m"
 
-    # --- Wait initialization ---
-    info "Waiting 60 seconds for all services to initialize properly..."
+    # Wait the initialization
+    echo -e "\e[1;34m[INFO] Waiting for 60 seconds for all services to initialize properly...\e[0m"
+    
     for i in $(seq 60 -1 0); do
+        # The '-ne' and '\r' ensure the countdown happens on a single, updating line.
         echo -ne "Time remaining: $i seconds \r"
         sleep 1
     done
-    echo
 
     # --- Access Information ---
     BLUE='\e[1;34m'
@@ -303,21 +278,14 @@ install_module() {
 
 # =========================
 # Step 3: Integrations (NEW)
-# Sesuai instruksi Anda:
-# - Hapus seluruh logic integrasi lama
-# - Copy dulu file dari wazuh-docker/single-node/custom-integrations:
-#   local_rules.xml, ossec.conf, custom-misp.py, custom-wazuh_iris.py
-# - Copy ke volumes:
-#   integrations -> single-node_wazuh_integrations/_data/
-#   local_rules -> single-node_wazuh_etc/_data/rules/
-#   ossec.conf  -> single-node_wazuh_etc/_data/
-# - Patch key/URL di ossec.conf (volume) sesuai input user:
-#   IRIS hook_url + api_key, Shuffle hook_url, VirusTotal api_key
-# - Restart wazuh stack
 # =========================
-integrate_module() {
-    print_step_header "Step 3: Deploy Integrations (Copy + Patch ossec.conf)"
 
+# Integrate modules and Perform other configurations
+integrate_module() {
+    echo
+    echo -e "\e[1;32m -- Step 3: Perform Integrations -- \e[0m"
+    echo
+    
     SRC_DIR="${ROOT_DIR}/wazuh-docker/single-node/custom-integrations"
 
     VOL_INTEGRATIONS="/var/lib/docker/volumes/single-node_wazuh_integrations/_data"
@@ -494,15 +462,14 @@ integrate_module() {
     ok "Step 3 Completed: Integrations deployed (copy + patch + VT active-response + agent setup + restart)."
 }
 
-# =========================
-# Step 4: PoC
-# =========================
 poc_menu() {
-    print_step_header "Step 4: Run Proof of Concept (PoC)"
-
+    echo
+    echo -e "\e[1;32m -- Step 4: Run Proof of Concept (PoC) Use Cases -- \e[0m"
+    echo
+    
     while true; do
+
         echo -e "\n\e[1;32m--- PoC Menu ---\e[0m"
-        print_version_line
         PS3=$'\n\e[1;33mChoose a PoC to run (or return to menu): \e[0m'
         select opt in \
             "Brute Force Detection" \
@@ -511,71 +478,81 @@ poc_menu() {
             "Return to Main Menu"; do
             case $REPLY in
                 1)
-                    print_step_header "PoC: Brute Force Detection"
-                    echo -e "\e[1;34m[INFO] Simulate failed SSH login attempts to trigger Wazuh alerts.\e[0m"
-                    IP="$(curl -s ip.me -4 || hostname -I | awk '{print $1}')"
+                    # --- PoC: Brute Force Detection ---
+                    echo -e "\n\e[1;36m--- Simulating SSH Brute Force Attack --- \e[0m"
+                    
+                    echo -e "\e[1;34m[INFO] This will simulate 10 failed login attempts to trigger Wazuh alerts. \e[1;33mSimply enter any value in the password field.\e[0m"
+                    echo
+                    IP=$(curl -s ip.me -4 || hostname -I | awk '{print $1}')
+                    ssh fakeuser@$IP
                     echo -e "\e[1;34m[INFO] Target IP Address: $IP\e[0m"
                     for i in $(seq 1 10); do
                         echo "Simulating Brute Force: Attempt $i..."
-                        ssh -o BatchMode=yes -o ConnectTimeout=5 "fakeuser@$IP" || true
+                        # BatchMode=yes prevents password prompts, ensuring the attempt fails automatically
+                        ssh -o BatchMode=yes -o ConnectTimeout=5 "fakeuser@$IP"
                         sleep 1
                     done
-                    echo -e "\n\e[1;32mBrute force simulation complete. Check Wazuh dashboard for alerts.\e[0m"
+                    
+                    echo -e "\n\e[1;32m Brute force simulation complete. Check your Wazuh dashboard for alerts\e[0m"
                     break
                     ;;
                 2)
-                    print_step_header "PoC: Malware Detection (EICAR)"
-                    echo -e "\e[1;34m[INFO] Downloading EICAR test file (harmless) to trigger alerts.\e[0m"
-                    sudo curl -Lo /root/eicar.com https://secure.eicar.org/eicar.com
-                    sudo ls -lah /root/eicar.com
-                    echo -e "\n\e[1;32mMalware simulation complete. Check Wazuh alerts (VirusTotal/active-response).\e[0m"
+                    # --- PoC: Malware Detection ---
+                    echo -e "\n\e[1;36m--- Simulating Malware Detection --- \e[0m"
+                    echo -e "\e[1;34m[INFO] Downloading the EICAR test file. This is a HARMLESS file used to test antivirus software.\e[0m"
+                    
+                    sudo curl -Lo /root/eicar.com https://secure.eicar.org/eicar.com && sudo ls -lah /root/eicar.com
+                    echo -e "\e[1;34m[INFO] EICAR file downloaded to /root/eicar.com\e[0m"
+                    echo
+                    
+                    echo -e "\n\e[1;32m Malware simulation complete. Check your Wazuh dashboard for alerts related to active response and VirusTotal.\e[0m"
                     break
                     ;;
                 3)
-                    print_step_header "PoC: Web Defacement Detection"
-                    need_dir "${ROOT_DIR}/usecase/webdeface"
-                    pushd "${ROOT_DIR}/usecase/webdeface" >/dev/null
-
-                    IP="$(curl -s ip.me -4 || hostname -I | awk '{print $1}')"
+                    # --- PoC: Web Defacement Detection ---
+                    echo -e "\n\e[1;36m--- Simulating Web Defacement --- \e[0m"
+                                    
+                    cd usecase/webdeface
+                    IP=$(curl -s ip.me -4 || hostname -I | awk '{print $1}')
                     sudo sed -i -e "s/(your_vm_ip)/$IP/g" ./server.js
-
-                    echo -e "\e[1;34m[INFO] Starting temporary web server...\e[0m"
+                    
+                    echo -e "\e[1;34m[INFO] Starting a temporary web server...\e[0m"
                     nohup node server.js > server.log 2>&1 &
-                    WEBSERVER_PID=$!
+                    WEBSERVER_PID=$! # Save the Process ID
 
-                    echo -e "\n\e[1;33mAction Required:\e[0m visit http://$IP:3000"
-                    read -r -p "Ready to perform the web defacement? (y/n) " ans
-                    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+                    echo -e "\n\e[1;33mAction Required: Before we simulate the defacement, please visit your website at:\e[0m http://$IP:3000"
+                    read -p "Ready to perform the web defacement? (y/n) " -r
+                    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                         echo "Operation cancelled. Shutting down web server."
-                        kill "$WEBSERVER_PID" || true
-                        popd >/dev/null
+                        kill $WEBSERVER_PID
+                        cd ../..
                         break
                     fi
 
                     cat webdeface.html > index.html
-                    echo -e "\n\e[1;31m[ATTACK] Website defaced! Refresh your browser.\e[0m"
-                    echo -e "\e[1;34m[INFO] Check Wazuh dashboard for syscheck/file integrity alerts.\e[0m"
-
-                    read -r -p "Recover the website? (y/n) " ans2
-                    if [[ "$ans2" =~ ^[Yy]$ ]]; then
+                    echo -e "\n\e[1;31m[ATTACK] Your website has been defaced! Refresh your browser to see the change.\e[0m"
+                    echo -e "\e[1;34m[INFO] Check your Wazuh dashboard for file integrity alerts.\e[0m"
+                    
+                    read -p "Do you want to recover the website? (y/n) " -r
+                    if [[ $REPLY =~ ^[Yy]$ ]]; then
                         cat index_ori.html > index.html
-                        echo -e "\e[1;32mWebsite recovered.\e[0m"
+                        echo -e "\e[1;32m Your website has been recovered.\e[0m"
                     fi
-
-                    read -r -p "Shut down the temporary web server? (y/n) " ans3
-                    if [[ "$ans3" =~ ^[Yy]$ ]]; then
-                        kill "$WEBSERVER_PID" || true
-                        echo -e "\e[1;32mWeb server is off.\e[0m"
+                    
+                    read -p "Do you want to shut down the temporary web server? (y/n) " -r
+                    if [[ $REPLY =~ ^[Yy]$ ]]; then
+                        echo -e "\e[1;34m[INFO] Shutting down web server...\e[0m"
+                        kill $WEBSERVER_PID
+                        echo -e "\e[1;32m Web server is off.\e[0m"
                     else
-                        echo "Web server still running at http://$IP:3000 (PID $WEBSERVER_PID)"
+                         echo "OK. The web server is still running at http://$IP:3000"
                     fi
-
-                    popd >/dev/null
+                    cd ../..
                     break
                     ;;
                 4)
                     echo "Returning to main menu..."
-                    return
+                    return # Exits the function and goes back to the main script menu
                     ;;
                 *)
                     echo "Invalid option. Please try again."
@@ -585,29 +562,23 @@ poc_menu() {
     done
 }
 
-# =========================
-# Main Menu
-# =========================
+# Menu loop
 while true; do
     print_banner
+    # ADD THIS LINE to display the menu title
     echo -e "\n\e[1;32m--- Main Menu ---\e[0m"
-    print_version_line
     PS3=$'\nChoose an option (or press Ctrl+C to exit): '
 
-    COLUMNS=1
+    # Force the menu into a single column
+    COLUMNS=1 
 
-    select opt in \
-      "Step 1: Update and Install Prerequisites" \
-      "Step 2: Install T-Guard SOC Package" \
-      "Step 3: Deploy Integrations (Copy + Patch)" \
-      "Step 4: Run Proof of Concept (PoC)" \
-      "Exit"; do
+    select opt in "Step 1: Update and Install Prerequisites" "Step 2: Install T-Guard SOC Package" "Step 3: Integrate T-Guard SOC Package" "Step 4: Run Proof of Concept (PoC)" "Exit"; do
         case $REPLY in
-            1) update_install_pre; break ;;
-            2) install_module; break ;;
-            3) integrate_module; break ;;
-            4) poc_menu; break ;;
-            5) echo "See you later!"; exit 0 ;;
+            1) update_install_pre ; break ;;
+            2) install_module ; break ;;
+            3) integrate_module ; break ;;
+            4) poc_menu ; break ;;
+            5) echo "See you later!" ; exit ;;
             *) echo "Invalid option. Try again." ;;
         esac
     done
