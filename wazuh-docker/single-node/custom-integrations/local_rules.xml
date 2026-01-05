@@ -1,0 +1,90 @@
+<!-- Local rules -->
+<!-- Modify it at your will. -->
+<!-- Copyright (C) 2015, Wazuh Inc. -->
+
+<group name="local,syslog,sshd,">
+
+  <!--
+  Dec 10 01:02:02 host sshd[1234]: Failed none for root from 1.1.1.1 port 1066 ssh2
+  -->
+  <rule id="100001" level="5">
+    <if_sid>5716</if_sid>
+    <srcip>1.1.1.1</srcip>
+    <description>sshd: authentication failed from IP 1.1.1.1.</description>
+    <group>authentication_failed,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+  </rule>
+
+</group>
+
+<group name="threat_intel,">
+
+  <rule id="100620" level="2">
+    <field name="integration">misp</field>
+    <description>MISPs</description>
+    <group>misp,</group>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100621" level="5">
+    <if_sid>100620</if_sid>
+    <field name="misp.error">\.+</field>
+    <description>MISP - Error connecting to API</description>
+    <options>no_full_log</options>
+    <group>misp,misp_error,</group>
+  </rule>
+
+  <rule id="100622" level="12">
+    <if_sid>100620</if_sid>
+    <field name="misp.category">\.+</field>
+    <field name="misp.value">\d+.\d+.\d+.\d+\.*</field>
+    <description>MISP - IoC found in Threat Intel - Category: $(misp.category), Attribute: $(misp.value)</description>
+    <options>no_full_log</options>
+    <group>misp,misp_alert,</group>
+  </rule>
+
+  <rule id="100623" level="12">
+    <if_sid>100620</if_sid>
+    <field name="misp.category">\.+</field>
+    <field name="misp.file_path">\.+</field>
+    <!-- Ignore if it's hash value for empty file -->
+    <match negate="yes">\.*d41d8cd98f00b204e9800998ecf8427e\.*</match>
+    <description>MISP - IoC found in Threat Intel - Category: $(misp.category), Attribute: $(misp.file_path)</description>
+    <options>no_full_log</options>
+    <group>misp,misp_alert,</group>
+  </rule>
+
+</group>
+
+<group name="syscheck,pci_dss_11.5,nist_800_53_SI.7,">
+
+  <!-- Rules for Linux systems -->
+  <rule id="100200" level="12">
+    <if_sid>550</if_sid>
+    <field name="file">/home/iris/tguard-v1.2/usecase/webdeface</field>
+    <description>Web defacement detected: file modified in web directory.</description>
+  </rule>
+
+  <rule id="100201" level="10">
+    <if_sid>550</if_sid>
+    <match>\.html$</match>
+    <description>Web defacement suspected: HTML file modified.</description>
+    <group>web_defacement,fim,</group>
+  </rule>  
+
+</group>
+
+<group name="virustotal,">
+
+  <rule id="100092" level="12">
+    <if_sid>657</if_sid>
+    <match>Successfully removed threat</match>
+    <description>$(parameters.program) removed threat located at $(parameters.alert.data.virustotal.source.file)</description>
+  </rule>
+
+  <rule id="100093" level="12">
+    <if_sid>657</if_sid>
+    <match>Error removing threat</match>
+    <description>Error removing threat located at $(parameters.alert.data.virustotal.source.file)</description>
+  </rule>
+
+</group>
