@@ -306,7 +306,7 @@ install_module() {
 # Sesuai instruksi Anda:
 # - Hapus seluruh logic integrasi lama
 # - Copy dulu file dari wazuh-docker/single-node/custom-integrations:
-#   local_rules.xml, ossec.conf, custom-misp.py, custom-iris.py, custom-wazuh_iris.py
+#   local_rules.xml, ossec.conf, custom-misp.py, custom-wazuh_iris.py
 # - Copy ke volumes:
 #   integrations -> single-node_wazuh_integrations/_data/
 #   local_rules -> single-node_wazuh_etc/_data/rules/
@@ -327,12 +327,15 @@ integrate_module() {
     MANAGER_CONTAINER="single-node-wazuh.manager-1"
     WAZUH_COMPOSE_DIR="${ROOT_DIR}/wazuh-docker/single-node"
 
-    # Required files (sesuai daftar Anda)
+    # Required files
     need_file "${SRC_DIR}/custom-misp.py"
-    need_file "${SRC_DIR}/custom-iris.py"
     need_file "${SRC_DIR}/custom-wazuh_iris.py"
     need_file "${SRC_DIR}/local_rules.xml"
     need_file "${SRC_DIR}/ossec.conf"
+
+    # VirusTotal active response + agent config requirements
+    need_file "${SRC_DIR}/remove-threat.sh"
+    need_file "${SRC_DIR}/add_vtwazuh_config-agent.conf"
 
     # Required volumes
     sudo test -d "$VOL_INTEGRATIONS" || die "Volume integrations tidak ada: $VOL_INTEGRATIONS"
@@ -353,19 +356,18 @@ integrate_module() {
     echo
     info "Backup existing files in volumes (if any)..."
     backup_if_exists "${VOL_INTEGRATIONS}/custom-misp.py"
-    backup_if_exists "${VOL_INTEGRATIONS}/custom-iris.py"
     backup_if_exists "${VOL_INTEGRATIONS}/custom-wazuh_iris.py"
     backup_if_exists "${VOL_RULES}/local_rules.xml"
     backup_if_exists "${VOL_ETC}/ossec.conf"
+    backup_if_exists "${VOL_ETC}/active-response/bin/remove-threat.sh"
 
-    # Copy phase
+    # Copy phase (integrations + rules + ossec.conf)
     echo
     info "Copy integration files to Docker volumes..."
-    sudo cp -f "${SRC_DIR}/custom-misp.py"       "${VOL_INTEGRATIONS}/custom-misp.py"
-    sudo cp -f "${SRC_DIR}/custom-iris.py"       "${VOL_INTEGRATIONS}/custom-iris.py"
-    sudo cp -f "${SRC_DIR}/custom-wazuh_iris.py" "${VOL_INTEGRATIONS}/custom-wazuh_iris.py"
-    sudo cp -f "${SRC_DIR}/local_rules.xml"      "${VOL_RULES}/local_rules.xml"
-    sudo cp -f "${SRC_DIR}/ossec.conf"           "${VOL_ETC}/ossec.conf"
+    sudo cp -f "${SRC_DIR}/custom-misp.py"        "${VOL_INTEGRATIONS}/custom-misp.py"
+    sudo cp -f "${SRC_DIR}/custom-wazuh_iris.py"  "${VOL_INTEGRATIONS}/custom-wazuh_iris.py"
+    sudo cp -f "${SRC_DIR}/local_rules.xml"       "${VOL_RULES}/local_rules.xml"
+    sudo cp -f "${SRC_DIR}/ossec.conf"            "${VOL_ETC}/ossec.conf"
     ok "Files copied to volumes."
 
     # Patch ossec.conf in volume
@@ -392,16 +394,82 @@ integrate_module() {
 
     ok "ossec.conf patched."
 
-    # Apply permissions inside container (minimum hardening)
+    # --- IRIS DB + Python deps on Manager (gunakan container yang benar)
     echo
-    info "Applying permissions inside Wazuh manager container..."
+    info "IRIS DB bootstrap + install python deps on Wazuh Manager..."
+    sudo docker exec -i iriswebapp_db psql -U postgres -d iris_db -c \
+      "INSERT INTO user_client (id, user_id, client_id, access_level, allow_alerts) VALUES (1, 1, 1, 4, 't');" || true
+
+    # Pastikan container manager benar
     sudo docker inspect "$MANAGER_CONTAINER" >/dev/null 2>&1 || die "Container tidak ditemukan: $MANAGER_CONTAINER"
 
+    sudo docker exec -ti "$MANAGER_CONTAINER" yum install -y python3-pip || true
+    sudo docker exec -ti "$MANAGER_CONTAINER" pip3 install requests || true
+
+    # ==========================================================
+    # VirusTotal <-> Wazuh: Active Response + Agent Setup
+    # ==========================================================
+    echo
+    info "VirusTotal integration: deploying remove-threat.sh to Manager (via volume) + Agent setup..."
+
+    # 1) Copy remove-threat.sh to Manager active-response bin via etc volume
+    sudo mkdir -p "${VOL_ETC}/active-response/bin"
+    sudo cp -f "${SRC_DIR}/remove-threat.sh" "${VOL_ETC}/active-response/bin/remove-threat.sh"
+
+    # 2) Agent setup: patch USECASE_DIR then append config to host agent ossec.conf
+    USECASE_DIR="${ROOT_DIR}/usecase/webdeface"
+    AGENT_OSSEC="/var/ossec/etc/ossec.conf"
+    AGENT_CFG_TMP="/tmp/add_vtwazuh_config-agent.conf"
+
+    if [[ ! -d "$USECASE_DIR" ]]; then
+        info "USECASE_DIR tidak ditemukan di host: $USECASE_DIR (pastikan folder usecase/webdeface ada)."
+    fi
+
+    # Siapkan file agent conf sementara
+    cp -f "${SRC_DIR}/add_vtwazuh_config-agent.conf" "$AGENT_CFG_TMP"
+
+    # Replace placeholder $USECASE_DIR pada file config agent
+    sed -i "s|<directories report_changes=\"yes\" whodata=\"yes\" realtime=\"yes\">\$USECASE_DIR</directories>|<directories report_changes=\"yes\" whodata=\"yes\" realtime=\"yes\">${USECASE_DIR}</directories>|" \
+      "$AGENT_CFG_TMP"
+
+    # Append ke agent ossec.conf (host)
+    if [[ -f "$AGENT_OSSEC" ]]; then
+        sudo bash -c "cat '$AGENT_CFG_TMP' >> '$AGENT_OSSEC'"
+        ok "Agent ossec.conf updated: appended VT syscheck directories."
+    else
+        info "Agent ossec.conf tidak ditemukan di $AGENT_OSSEC. Lewati agent append."
+    fi
+
+    # Pastikan jq tersedia (sudah di Step 1, tapi tetap aman)
+    if ! command -v jq >/dev/null 2>&1; then
+        sudo apt update
+        sudo apt -y install jq
+    fi
+
+    # Copy remove-threat.sh to host agent active-response bin (optional / safe)
+    if [[ -d "/var/ossec/active-response/bin" ]]; then
+        sudo cp -f "${SRC_DIR}/remove-threat.sh" /var/ossec/active-response/bin/remove-threat.sh
+        sudo chmod 750 /var/ossec/active-response/bin/remove-threat.sh
+        sudo chown root:wazuh /var/ossec/active-response/bin/remove-threat.sh || true
+        ok "remove-threat.sh copied to host agent active-response bin."
+    else
+        info "Folder /var/ossec/active-response/bin tidak ada (host). Lewati copy untuk agent."
+    fi
+
+    # Restart host agent (jika ada)
+    if systemctl list-unit-files | grep -q "^wazuh-agent"; then
+        sudo systemctl restart wazuh-agent
+        ok "Host wazuh-agent restarted."
+    else
+        info "wazuh-agent service tidak ditemukan di host. Lewati restart agent."
+    fi
+
+    # Apply permissions inside manager container (integrations + rules + ossec + active-response)
+    echo
+    info "Applying permissions inside Wazuh manager container..."
     sudo docker exec -ti "$MANAGER_CONTAINER" chown root:wazuh /var/ossec/integrations/custom-misp.py || true
-    sudo docker exec -ti "$MANAGER_CONTAINER" chown root:wazuh /var/ossec/integrations/custom-iris.py || true
     sudo docker exec -ti "$MANAGER_CONTAINER" chown root:wazuh /var/ossec/integrations/custom-wazuh_iris.py || true
     sudo docker exec -ti "$MANAGER_CONTAINER" chmod 750 /var/ossec/integrations/custom-misp.py || true
-    sudo docker exec -ti "$MANAGER_CONTAINER" chmod 750 /var/ossec/integrations/custom-iris.py || true
     sudo docker exec -ti "$MANAGER_CONTAINER" chmod 750 /var/ossec/integrations/custom-wazuh_iris.py || true
 
     sudo docker exec -ti "$MANAGER_CONTAINER" chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml || true
@@ -409,6 +477,10 @@ integrate_module() {
 
     sudo docker exec -ti "$MANAGER_CONTAINER" chown root:wazuh /var/ossec/etc/ossec.conf || true
     sudo docker exec -ti "$MANAGER_CONTAINER" chmod 640 /var/ossec/etc/ossec.conf || true
+
+    # Active-response perms on manager (location=local -> manager butuh file ini)
+    sudo docker exec -ti "$MANAGER_CONTAINER" chown root:wazuh /var/ossec/active-response/bin/remove-threat.sh || true
+    sudo docker exec -ti "$MANAGER_CONTAINER" chmod 750 /var/ossec/active-response/bin/remove-threat.sh || true
 
     ok "Permissions applied."
 
@@ -419,7 +491,7 @@ integrate_module() {
     sudo docker compose restart
     popd >/dev/null
 
-    ok "Step 3 Completed: Integrations deployed (copy + patch + restart)."
+    ok "Step 3 Completed: Integrations deployed (copy + patch + VT active-response + agent setup + restart)."
 }
 
 # =========================
