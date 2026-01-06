@@ -239,56 +239,51 @@ install_module() {
     echo -e "\e[1;34m[INFO] Starting MISP containers...\e[0m"
     sudo docker compose up -d 2>/dev/null
     
-    # Get the actual database container name
-    DB_CONTAINER=$(sudo docker ps --filter "name=db" --filter "ancestor=mariadb" --format "{{.Names}}" | grep misp)
-    
-    if [ -z "$DB_CONTAINER" ]; then
-        echo -e "\e[1;31m[ERROR] Database container not found. Checking all MISP containers...\e[0m"
-        sudo docker ps -a | grep misp
-        exit 1
-    fi
-    
+# Get the actual database container name
+DB_CONTAINER=$(sudo docker ps --filter "name=db" --filter "ancestor=mariadb" --format "{{.Names}}" | grep misp | head -1)
+
+# Jika DB container tidak ditemukan, jangan bikin ribet & jangan stop script
+if [ -z "$DB_CONTAINER" ]; then
+    echo -e "\e[1;33m[WARN] MISP DB container (mariadb) tidak ditemukan. Skip konfigurasi DB & restart MISP, lanjut step berikutnya.\e[0m"
+else
     echo -e "\e[1;34m[INFO] Found database container: $DB_CONTAINER\e[0m"
-    echo -e "\e[1;34m[INFO] Waiting for MariaDB to initialize (this may take 1-2 minutes)...\e[0m"
-    
-    # Wait for database to be fully ready by checking logs
+    echo -e "\e[1;34m[INFO] Waiting for MariaDB to initialize...\e[0m"
+
     max_attempts=60
     attempt=0
     db_ready=false
-    
+
     while [ $attempt -lt $max_attempts ]; do
-        # Check if database says "ready for connections"
         if sudo docker logs "$DB_CONTAINER" 2>&1 | grep -q "ready for connections"; then
             echo -e "\e[1;32m[OK] Database is ready for connections!\e[0m"
             db_ready=true
             break
         fi
-        
-        # Show progress every 5 attempts
+
+        # progress setiap 5 detik
         if [ $((attempt % 5)) -eq 0 ]; then
-            echo -e "\e[1;33m[WAIT] Database still initializing... ($attempt seconds elapsed)\e[0m"
+            echo -e "\e[1;33m[WAIT] Database masih init... ($attempt detik)\e[0m"
         fi
-        
+
         attempt=$((attempt + 1))
         sleep 1
     done
-    
+
+    # kalau DB tidak ready, jangan exit — cukup warning dan lanjut
     if [ "$db_ready" = false ]; then
-        echo -e "\e[1;31m[ERROR] Database failed to start properly after $max_attempts seconds.\e[0m"
-        sudo docker logs "$DB_CONTAINER" --tail 100
-        exit 1
-    fi
-    
-    # Additional wait to ensure database is stable
-    echo -e "\e[1;34m[INFO] Database ready, waiting 5 more seconds for stability...\e[0m"
-    sleep 5
-    
-    # Get MySQL password from .env file
-    MYSQL_PASSWORD=$(grep "^MYSQL_PASSWORD=" .env | cut -d'=' -f2)
-    
-    # Fix database user permissions
-    echo -e "\e[1;34m[INFO] Configuring database users and permissions...\e[0m"
-    sudo docker exec -i "$DB_CONTAINER" mysql -u root -p"$MYSQL_PASSWORD" <<EOF
+        echo -e "\e[1;33m[WARN] Database belum ready setelah $max_attempts detik. Skip konfigurasi user DB, lanjut step berikutnya.\e[0m"
+    else
+        echo -e "\e[1;34m[INFO] Database ready, waiting 5 seconds...\e[0m"
+        sleep 5
+
+        # Get MySQL password from .env file (kalau kosong, warning dan skip)
+        MYSQL_PASSWORD=$(grep "^MYSQL_PASSWORD=" .env 2>/dev/null | cut -d'=' -f2)
+
+        if [ -z "$MYSQL_PASSWORD" ]; then
+            echo -e "\e[1;33m[WARN] MYSQL_PASSWORD tidak ditemukan di .env. Skip konfigurasi user DB, lanjut.\e[0m"
+        else
+            echo -e "\e[1;34m[INFO] Configuring database users and permissions...\e[0m"
+            sudo docker exec -i "$DB_CONTAINER" mysql -u root -p"$MYSQL_PASSWORD" <<EOF
 CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'misp'@'localhost' IDENTIFIED BY '$MYSQL_PASSWORD';
 CREATE USER IF NOT EXISTS 'misp'@'%' IDENTIFIED BY '$MYSQL_PASSWORD';
@@ -296,81 +291,83 @@ GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'localhost';
 GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'%';
 FLUSH PRIVILEGES;
 EOF
-    
-    if [ $? -eq 0 ]; then
-        echo -e "\e[1;32m[OK] Database users configured successfully.\e[0m"
-    else
-        echo -e "\e[1;31m[ERROR] Failed to configure database users.\e[0m"
-        exit 1
-    fi
-    
-    # Restart MISP containers to apply changes
-    echo -e "\e[1;34m[INFO] Restarting MISP containers...\e[0m"
-    sudo docker restart "$DB_CONTAINER"
-    sleep 5
-    
-    # Get other MISP container names dynamically
-    MISP_CORE=$(sudo docker ps --filter "name=misp-core" --format "{{.Names}}" | head -1)
-    MISP_MODULES=$(sudo docker ps --filter "name=misp-modules" --format "{{.Names}}" | head -1)
-    
-    if [ -n "$MISP_CORE" ]; then
-        sudo docker restart "$MISP_CORE"
-    fi
-    
-    if [ -n "$MISP_MODULES" ]; then
-        sudo docker restart "$MISP_MODULES"
-    fi
-    
-    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
-    
-    # Check MISP Status
-    echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
-    
-    # Get actual container names dynamically
-    MISP_CORE=$(sudo docker ps -a --filter "name=misp-core" --format "{{.Names}}" | head -1)
-    MISP_MODULES=$(sudo docker ps -a --filter "name=misp-modules" --format "{{.Names}}" | head -1)
-    MISP_MAIL=$(sudo docker ps -a --filter "name=mail" --format "{{.Names}}" | grep misp | head -1)
-    MISP_REDIS=$(sudo docker ps -a --filter "name=redis" --format "{{.Names}}" | grep misp | head -1)
-    
-    misp_containers=("$DB_CONTAINER" "$MISP_CORE" "$MISP_MODULES" "$MISP_MAIL" "$MISP_REDIS")
-    
-    for container in "${misp_containers[@]}"; do
-        if [ -z "$container" ]; then
-            continue
-        fi
-        
-        sleep 10
-        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
-        if [ "$running_status" != "true" ]; then
-            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$container' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
-            sudo docker logs "$container" --tail 50
-            exit 1
-        fi
-    done
-    echo
-    echo -e "\e[1;32m MISP deployment is successful and all core containers are running.\e[0m"
-    
-    # Monitor MISP initialization
-    echo -e "\e[1;34m[INFO] Monitoring MISP initialization (this may take 3-5 minutes)...\e[0m"
-    echo -e "\e[1;33m[TIP] You can press Ctrl+C to skip monitoring and continue with the script.\e[0m"
-    
-    # Monitor for database initialization completion
-    if [ -n "$MISP_CORE" ]; then
-        timeout=300  # 5 minutes timeout
-        elapsed=0
-        while [ $elapsed -lt $timeout ]; do
-            if sudo docker logs "$MISP_CORE" 2>&1 | grep -q "INIT | Database initialized"; then
-                echo -e "\e[1;32m[OK] MISP database initialization completed!\e[0m"
-                break
-            elif sudo docker logs "$MISP_CORE" 2>&1 | grep -q "ERROR.*Table.*doesn't exist"; then
-                echo -ne "\e[1;33m[WAIT] Still initializing database schema... ($elapsed seconds elapsed)\r\e[0m"
+
+            # kalau gagal, jangan exit — warning dan lanjut
+            if [ $? -eq 0 ]; then
+                echo -e "\e[1;32m[OK] Database users configured successfully.\e[0m"
+            else
+                echo -e "\e[1;33m[WARN] Failed to configure database users. Skip dan lanjut.\e[0m"
             fi
-            sleep 5
-            elapsed=$((elapsed + 5))
+        fi
+
+        # Restart containers (jangan exit kalau gagal)
+        echo -e "\e[1;34m[INFO] Restarting MISP containers...\e[0m"
+        sudo docker restart "$DB_CONTAINER" >/dev/null 2>&1 || \
+            echo -e "\e[1;33m[WARN] Gagal restart DB container. Lanjut.\e[0m"
+        sleep 5
+
+        MISP_CORE=$(sudo docker ps --filter "name=misp-core" --format "{{.Names}}" | head -1)
+        MISP_MODULES=$(sudo docker ps --filter "name=misp-modules" --format "{{.Names}}" | head -1)
+
+        if [ -n "$MISP_CORE" ]; then
+            sudo docker restart "$MISP_CORE" >/dev/null 2>&1 || \
+                echo -e "\e[1;33m[WARN] Gagal restart $MISP_CORE. Lanjut.\e[0m"
+        fi
+
+        if [ -n "$MISP_MODULES" ]; then
+            sudo docker restart "$MISP_MODULES" >/dev/null 2>&1 || \
+                echo -e "\e[1;33m[WARN] Gagal restart $MISP_MODULES. Lanjut.\e[0m"
+        fi
+
+        echo -e "\e[1;32mMISP deployment initiated.\e[0m"
+
+        # Check MISP Status (jangan exit kalau ada yang mati; tampilkan warning & lanjut)
+        echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
+
+        MISP_CORE=$(sudo docker ps -a --filter "name=misp-core" --format "{{.Names}}" | head -1)
+        MISP_MODULES=$(sudo docker ps -a --filter "name=misp-modules" --format "{{.Names}}" | head -1)
+        MISP_MAIL=$(sudo docker ps -a --filter "name=mail" --format "{{.Names}}" | grep misp | head -1)
+        MISP_REDIS=$(sudo docker ps -a --filter "name=redis" --format "{{.Names}}" | grep misp | head -1)
+
+        misp_containers=("$DB_CONTAINER" "$MISP_CORE" "$MISP_MODULES" "$MISP_MAIL" "$MISP_REDIS")
+
+        for container in "${misp_containers[@]}"; do
+            [ -z "$container" ] && continue
+
+            sleep 2
+            running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+
+            if [ "$running_status" != "true" ]; then
+                echo -e "\e[1;33m[WARN] Container '$container' tidak running. Lihat logs terakhir:\e[0m"
+                sudo docker logs "$container" --tail 50 2>/dev/null
+                # lanjut tanpa exit
+            fi
         done
-        echo ""  # New line after progress
+
+        echo -e "\e[1;32m[INFO] Verifikasi container selesai (non-blocking).\e[0m"
+
+        # Monitor MISP initialization (opsional; jangan bikin script berhenti)
+        echo -e "\e[1;34m[INFO] Monitoring MISP initialization...\e[0m"
+        echo -e "\e[1;33m[TIP] Ctrl+C untuk skip monitoring.\e[0m"
+
+        if [ -n "$MISP_CORE" ]; then
+            timeout=300
+            elapsed=0
+            while [ $elapsed -lt $timeout ]; do
+                if sudo docker logs "$MISP_CORE" 2>&1 | grep -q "INIT | Database initialized"; then
+                    echo -e "\e[1;32m[OK] MISP database initialization completed!\e[0m"
+                    break
+                elif sudo docker logs "$MISP_CORE" 2>&1 | grep -q "ERROR.*Table.*doesn't exist"; then
+                    echo -ne "\e[1;33m[WAIT] Masih init schema... ($elapsed detik)\r\e[0m"
+                fi
+                sleep 5
+                elapsed=$((elapsed + 5))
+            done
+            echo ""
+        fi
     fi
+fi
+
     
     cd ..
 
