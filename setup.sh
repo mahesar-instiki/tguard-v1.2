@@ -71,15 +71,16 @@ update_install_pre() {
     echo
     echo -e "\e[1;36m--> Installing Docker...\e[0m"
     echo
+    
     # Check if Docker is installed
-        if command -v docker > /dev/null; then
-            echo "Docker is already installed."
-        else
-            # Install Docker
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sudo sh get-docker.sh
-            sudo systemctl enable docker.service && sudo systemctl enable containerd.service
-        fi
+    if command -v docker > /dev/null; then
+        echo "Docker is already installed."
+    else
+        # Install Docker
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sudo sh get-docker.sh
+        sudo systemctl enable docker.service && sudo systemctl enable containerd.service
+    fi
     echo
     echo -e "\e[1;32m Step 1 Completed \e[0m"
 }
@@ -225,40 +226,151 @@ install_module() {
     echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
     cd ..
 
-    # -------------------------
-    # 4) MISP
-    # -------------------------
+   # --- 4. Installing MISP (Threat Intelligence) ---
     print_step_header "Installing MISP (Threat Intelligence)"
-
-    need_dir "${ROOT_DIR}/misp-docker"
-    pushd "${ROOT_DIR}/misp-docker" >/dev/null
-
-    need_file "${ROOT_DIR}/misp-docker/template.env"
-
-    sed -i "s|BASE_URL=.*|BASE_URL='https://${IP_ADDRESS}:1443'|" template.env
+    cd misp-docker
+    
+    # Configure MISP environment
+    sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
     sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
     sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
     cp template.env .env
-
-    sudo docker compose up -d 2>/dev/null || true
     
-    # Restart containers (sesuai versi new script Anda)
-    sudo docker restart misp-docker-db-1 || true
-    sudo docker restart misp-docker-misp-core-1 || true
-    sudo docker restart misp-docker-misp-modules-1 || true
-
-    misp_containers=("misp-docker-misp-core-1" "misp-docker-misp-modules-1" "misp-docker-mail-1" "misp-docker-redis-1" "misp-docker-db-1")
-    for c in "${misp_containers[@]}"; do
+    echo -e "\e[1;34m[INFO] Starting MISP containers...\e[0m"
+    sudo docker compose up -d 2>/dev/null
+    
+    # Get the actual database container name
+    DB_CONTAINER=$(sudo docker ps --filter "name=db" --filter "ancestor=mariadb" --format "{{.Names}}" | grep misp)
+    
+    if [ -z "$DB_CONTAINER" ]; then
+        echo -e "\e[1;31m[ERROR] Database container not found. Checking all MISP containers...\e[0m"
+        sudo docker ps -a | grep misp
+        exit 1
+    fi
+    
+    echo -e "\e[1;34m[INFO] Found database container: $DB_CONTAINER\e[0m"
+    echo -e "\e[1;34m[INFO] Waiting for MariaDB to initialize (this may take 1-2 minutes)...\e[0m"
+    
+    # Wait for database to be fully ready by checking logs
+    max_attempts=60
+    attempt=0
+    db_ready=false
+    
+    while [ $attempt -lt $max_attempts ]; do
+        # Check if database says "ready for connections"
+        if sudo docker logs "$DB_CONTAINER" 2>&1 | grep -q "ready for connections"; then
+            echo -e "\e[1;32m[OK] Database is ready for connections!\e[0m"
+            db_ready=true
+            break
+        fi
+        
+        # Show progress every 5 attempts
+        if [ $((attempt % 5)) -eq 0 ]; then
+            echo -e "\e[1;33m[WAIT] Database still initializing... ($attempt seconds elapsed)\e[0m"
+        fi
+        
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    
+    if [ "$db_ready" = false ]; then
+        echo -e "\e[1;31m[ERROR] Database failed to start properly after $max_attempts seconds.\e[0m"
+        sudo docker logs "$DB_CONTAINER" --tail 100
+        exit 1
+    fi
+    
+    # Additional wait to ensure database is stable
+    echo -e "\e[1;34m[INFO] Database ready, waiting 5 more seconds for stability...\e[0m"
+    sleep 5
+    
+    # Get MySQL password from .env file
+    MYSQL_PASSWORD=$(grep "^MYSQL_PASSWORD=" .env | cut -d'=' -f2)
+    
+    # Fix database user permissions
+    echo -e "\e[1;34m[INFO] Configuring database users and permissions...\e[0m"
+    sudo docker exec -i "$DB_CONTAINER" mysql -u root -p"$MYSQL_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'misp'@'localhost' IDENTIFIED BY '$MYSQL_PASSWORD';
+CREATE USER IF NOT EXISTS 'misp'@'%' IDENTIFIED BY '$MYSQL_PASSWORD';
+GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'localhost';
+GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'%';
+FLUSH PRIVILEGES;
+EOF
+    
+    if [ $? -eq 0 ]; then
+        echo -e "\e[1;32m[OK] Database users configured successfully.\e[0m"
+    else
+        echo -e "\e[1;31m[ERROR] Failed to configure database users.\e[0m"
+        exit 1
+    fi
+    
+    # Restart MISP containers to apply changes
+    echo -e "\e[1;34m[INFO] Restarting MISP containers...\e[0m"
+    sudo docker restart "$DB_CONTAINER"
+    sleep 5
+    
+    # Get other MISP container names dynamically
+    MISP_CORE=$(sudo docker ps --filter "name=misp-core" --format "{{.Names}}" | head -1)
+    MISP_MODULES=$(sudo docker ps --filter "name=misp-modules" --format "{{.Names}}" | head -1)
+    
+    if [ -n "$MISP_CORE" ]; then
+        sudo docker restart "$MISP_CORE"
+    fi
+    
+    if [ -n "$MISP_MODULES" ]; then
+        sudo docker restart "$MISP_MODULES"
+    fi
+    
+    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
+    
+    # Check MISP Status
+    echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
+    
+    # Get actual container names dynamically
+    MISP_CORE=$(sudo docker ps -a --filter "name=misp-core" --format "{{.Names}}" | head -1)
+    MISP_MODULES=$(sudo docker ps -a --filter "name=misp-modules" --format "{{.Names}}" | head -1)
+    MISP_MAIL=$(sudo docker ps -a --filter "name=mail" --format "{{.Names}}" | grep misp | head -1)
+    MISP_REDIS=$(sudo docker ps -a --filter "name=redis" --format "{{.Names}}" | grep misp | head -1)
+    
+    misp_containers=("$DB_CONTAINER" "$MISP_CORE" "$MISP_MODULES" "$MISP_MAIL" "$MISP_REDIS")
+    
+    for container in "${misp_containers[@]}"; do
+        if [ -z "$container" ]; then
+            continue
+        fi
+        
         sleep 10
-        running_status="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || true)"
-        if [[ "$running_status" != "true" ]]; then
-            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$c' is not running.\e[0m"
-            echo -e "\e[1;33mDisplaying logs for $c:\e[0m"
-            sudo docker logs "$c" --tail 80 || true
-            popd >/dev/null
+        running_status=$(sudo docker inspect --format='{{.State.Running}}' "$container" 2>/dev/null)
+        if [ "$running_status" != "true" ]; then
+            echo -e "\e[1;31m[ERROR] MISP installation failed: Container '$container' is not running.\e[0m"
+            echo -e "\e[1;33mDisplaying logs for $container:\e[0m"
+            sudo docker logs "$container" --tail 50
             exit 1
         fi
     done
+    echo
+    echo -e "\e[1;32m MISP deployment is successful and all core containers are running.\e[0m"
+    
+    # Monitor MISP initialization
+    echo -e "\e[1;34m[INFO] Monitoring MISP initialization (this may take 3-5 minutes)...\e[0m"
+    echo -e "\e[1;33m[TIP] You can press Ctrl+C to skip monitoring and continue with the script.\e[0m"
+    
+    # Monitor for database initialization completion
+    if [ -n "$MISP_CORE" ]; then
+        timeout=300  # 5 minutes timeout
+        elapsed=0
+        while [ $elapsed -lt $timeout ]; do
+            if sudo docker logs "$MISP_CORE" 2>&1 | grep -q "INIT | Database initialized"; then
+                echo -e "\e[1;32m[OK] MISP database initialization completed!\e[0m"
+                break
+            elif sudo docker logs "$MISP_CORE" 2>&1 | grep -q "ERROR.*Table.*doesn't exist"; then
+                echo -ne "\e[1;33m[WAIT] Still initializing database schema... ($elapsed seconds elapsed)\r\e[0m"
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+        done
+        echo ""  # New line after progress
+    fi
     
     cd ..
 
@@ -309,7 +421,7 @@ install_module() {
 }
 
 # =========================
-# Step 3: Integrations (NEW)
+# Step 3: Integrations
 # =========================
 
 # Integrate modules and Perform other configurations
@@ -345,7 +457,7 @@ integrate_module() {
     # Input keys/urls
     echo
     info "Masukkan parameter patch untuk ossec.conf (di volume Wazuh)."
-    read -r -p "IRIS Base URL (contoh: https://IRIS_IP atau https://iris.domain): " IRIS_BASE_URL
+    read -r -p "IRIS Base URL (contoh: https://10.10.10.10 atau https://iris.domain): " IRIS_BASE_URL
     read -r -p "IRIS API Key: " IRIS_API_KEY
     read -r -p "Shuffle Webhook URL (FULL, contoh: https://.../hooks/...): " SHUFFLE_WEBHOOK_URL
     read -r -p "VirusTotal API Key: " VT_API_KEY
@@ -412,7 +524,24 @@ integrate_module() {
 
     ok "ossec.conf patched."
 
-    # --- IRIS DB + Python deps on Manager (gunakan container yang benar)
+    # Patch Python integrations
+    echo
+    info "Patching Python integration files..."
+    
+    # Patch custom-misp.py
+    sudo sed -i \
+      -e "s|misp_base_url = .*|misp_base_url = '${MISP_BASE_URL}'|" \
+      -e "s|misp_api_key = .*|misp_api_key = '${MISP_API_KEY}'|" \
+      "${VOL_INTEGRATIONS}/custom-misp.py"
+    
+    # Patch custom-wazuh_iris.py
+    sudo sed -i \
+      -e "s|wazuh_dashboard_url = .*|wazuh_dashboard_url = '${WAZUH_DASHBOARD_URL}'|" \
+      "${VOL_INTEGRATIONS}/custom-wazuh_iris.py"
+
+    ok "Python integration files patched."
+
+    # --- IRIS DB + Python deps on Manager
     echo
     info "IRIS DB bootstrap + install python deps on Wazuh Manager..."
     sudo docker exec -i iriswebapp_db psql -U postgres -d iris_db -c \
@@ -428,8 +557,16 @@ integrate_module() {
     # VirusTotal <-> Wazuh: Active Response + Agent Setup
     # ==========================================================
     echo
-    info "VirusTotal integration: deploying remove-threat.sh to Manager (via volume) + Agent setup..."
+    info "VirusTotal integration: deploying remove-threat.sh to Manager + Agent setup..."
 
+    # Copy remove-threat.sh to manager active-response bin
+    sudo docker cp "${SRC_DIR}/remove-threat.sh" "${MANAGER_CONTAINER}:/var/ossec/active-response/bin/remove-threat.sh" \
+    || die "Gagal docker cp remove-threat.sh ke manager container"
+
+    # Verifikasi singkat
+    sudo docker exec -t "$MANAGER_CONTAINER" ls -lah /var/ossec/active-response/bin/remove-threat.sh >/dev/null 2>&1 \
+    && ok "remove-threat.sh deployed to ${MANAGER_CONTAINER}:/var/ossec/active-response/bin/" \
+    || info "File belum terverifikasi di path target, cek manual."
 
     # 1) Agent setup: patch USECASE_DIR then append config to host agent ossec.conf
     USECASE_DIR="${ROOT_DIR}/usecase/webdeface"
@@ -454,21 +591,6 @@ integrate_module() {
     else
         info "Agent ossec.conf tidak ditemukan di $AGENT_OSSEC. Lewati agent append."
     fi
-
-    # Pastikan jq tersedia (sudah di Step 1, tapi tetap aman)
-    if ! command -v jq >/dev/null 2>&1; then
-        sudo apt update
-        sudo apt -y install jq
-    fi
-
-    # Copy remove-threat.sh to manager active-response bin (optional / safe)
-    sudo docker cp "${SRC_DIR}/remove-threat.sh" "${MANAGER_CONTAINER}:/var/ossec/active-response/bin/remove-threat.sh" \
-    || die "Gagal docker cp remove-threat.sh ke manager container"
-
-    # Verifikasi singkat
-    sudo docker exec -t "$MANAGER_CONTAINER" ls -lah /var/ossec/active-response/bin/remove-threat.sh >/dev/null 2>&1 \
-    && ok "remove-threat.sh deployed to ${MANAGER_CONTAINER}:/var/ossec/active-response/bin/" \
-    || warn "File belum terverifikasi di path target, cek manual."
 
     # Restart host agent (jika ada)
     if systemctl list-unit-files | grep -q "^wazuh-agent"; then
@@ -508,20 +630,19 @@ integrate_module() {
     ok "Step 3 Completed: Integrations deployed (copy + patch + VT active-response + agent setup + restart)."
 }
 
+# =========================
+# Step 4: PoC Menu
+# =========================
+
 poc_menu() {
     echo
     echo -e "\e[1;32m -- Step 4: Run Proof of Concept (PoC) Use Cases -- \e[0m"
     echo
     
     while true; do
-
         echo -e "\n\e[1;32m--- PoC Menu ---\e[0m"
-        PS3=$'\n\e[1;33mChoose a PoC to run (or return to menu): \e[0m'
-        select opt in \
-            "Brute Force Detection" \
-            "Malware Detection" \
-            "Web Defacement Detection" \
-            "Return to Main Menu"; do
+        PS3="Choose a PoC to run: "
+        select opt in "Brute Force Detection" "Malware Detection" "Web Defacement Detection" "Return to Main Menu"; do
             case $REPLY in
                 1)
                     # --- PoC: Brute Force Detection ---
@@ -530,12 +651,12 @@ poc_menu() {
                     echo -e "\e[1;34m[INFO] This will simulate 10 failed login attempts to trigger Wazuh alerts. \e[1;33mSimply enter any value in the password field.\e[0m"
                     echo
                     IP=$(curl -s ip.me -4 || hostname -I | awk '{print $1}')
-                    ssh fakeuser@$IP
                     echo -e "\e[1;34m[INFO] Target IP Address: $IP\e[0m"
+                    
                     for i in $(seq 1 10); do
                         echo "Simulating Brute Force: Attempt $i..."
                         # BatchMode=yes prevents password prompts, ensuring the attempt fails automatically
-                        ssh -o BatchMode=yes -o ConnectTimeout=5 "fakeuser@$IP"
+                        ssh -o BatchMode=yes -o ConnectTimeout=5 "fakeuser@$IP" 2>/dev/null
                         sleep 1
                     done
                     
@@ -564,8 +685,8 @@ poc_menu() {
                     
                     echo -e "\e[1;34m[INFO] Starting a temporary web server...\e[0m"
                     nohup node server.js > server.log 2>&1 &
-                    WEBSERVER_PID=$! # Save the Process ID
-
+                    WEBSERVER_PID=$!
+                    
                     echo -e "\n\e[1;33mAction Required: Before we simulate the defacement, please visit your website at:\e[0m http://$IP:3000"
                     read -p "Ready to perform the web defacement? (y/n) " -r
                     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -598,7 +719,7 @@ poc_menu() {
                     ;;
                 4)
                     echo "Returning to main menu..."
-                    return # Exits the function and goes back to the main script menu
+                    return
                     ;;
                 *)
                     echo "Invalid option. Please try again."
@@ -608,14 +729,15 @@ poc_menu() {
     done
 }
 
-# Menu loop
+# =========================
+# Main Menu Loop
+# =========================
+
 while true; do
     print_banner
-    # ADD THIS LINE to display the menu title
     echo -e "\n\e[1;32m--- Main Menu ---\e[0m"
-    PS3=$'\nChoose an option (or press Ctrl+C to exit): '
+    PS3=$'\nChoose an option: '
 
-    # Force the menu into a single column
     COLUMNS=1 
 
     select opt in "Step 1: Update and Install Prerequisites" "Step 2: Install T-Guard SOC Package" "Step 3: Integrate T-Guard SOC Package" "Step 4: Run Proof of Concept (PoC)" "Exit"; do
