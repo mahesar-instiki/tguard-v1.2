@@ -224,6 +224,21 @@ install_module() {
     done
     echo
     echo -e "\e[1;32mDFIR-IRIS deployment is successful and all core containers are running.\e[0m"
+        # Restart iriswebapp_app to ensure full initialization
+    echo -e "\e[1;34m[INFO] Restarting iriswebapp_app container...\e[0m"
+    sudo docker restart iriswebapp_app
+
+    echo -e "\e[1;34m[INFO] Waiting 60 seconds for iriswebapp_app to stabilize...\e[0m"
+    sleep 60
+
+    # Final sanity check after restart
+    running_status=$(sudo docker inspect --format='{{.State.Running}}' iriswebapp_app 2>/dev/null)
+    if [ "$running_status" != "true" ]; then
+        echo -e "\e[1;31m[ERROR] iriswebapp_app failed after restart.\e[0m"
+        sudo docker logs iriswebapp_app --tail 50
+        continue
+    fi
+
     cd ..
 
    # --- 4. Installing MISP (Threat Intelligence) ---
@@ -238,7 +253,12 @@ install_module() {
     
     echo -e "\e[1;34m[INFO] Starting MISP containers...\e[0m"
     sudo docker compose up -d 2>/dev/null
-    
+    sudo docker restart misp-docker-db-1
+    sudo docker restart misp-docker-misp-core-1
+      
+    echo -e "\e[1;34m[INFO] Waiting 5 minutes for MISP to fully initialize...\e[0m"
+    sleep 300
+
 # Get the actual database container name
 DB_CONTAINER=$(sudo docker ps --filter "name=db" --filter "ancestor=mariadb" --format "{{.Names}}" | grep misp | head -1)
 
