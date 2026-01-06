@@ -231,7 +231,7 @@ print_step_header "Installing MISP (Threat Intelligence)"
     cd misp-docker
     
     # Configure MISP environment
-    sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
+    sed -i 's|BASE_URL=.*|BASE_URL=https://$IP_ADDRESS:1443|' template.env
     sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
     sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
     cp template.env .env
