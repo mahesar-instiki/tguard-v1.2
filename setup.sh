@@ -345,7 +345,7 @@ integrate_module() {
     # Input keys/urls
     echo
     info "Masukkan parameter patch untuk ossec.conf (di volume Wazuh)."
-    read -r -p "IRIS Base URL (contoh: https://10.10.10.10 atau https://iris.domain): " IRIS_BASE_URL
+    read -r -p "IRIS Base URL (contoh: https://IRIS_IP atau https://iris.domain): " IRIS_BASE_URL
     read -r -p "IRIS API Key: " IRIS_API_KEY
     read -r -p "Shuffle Webhook URL (FULL, contoh: https://.../hooks/...): " SHUFFLE_WEBHOOK_URL
     read -r -p "VirusTotal API Key: " VT_API_KEY
