@@ -227,17 +227,71 @@ install_module() {
     cd ..
 
    # --- 4. Installing MISP (Threat Intelligence) ---
-    print_step_header "Installing MISP (Threat Intelligence)"
+print_step_header "Installing MISP (Threat Intelligence)"
     cd misp-docker
+    
+    # Configure MISP environment
     sed -i "s|BASE_URL=.*|BASE_URL='https://$IP_ADDRESS:1443'|" template.env
     sed -i 's|^CORE_HTTP_PORT=.*|CORE_HTTP_PORT=8081|' template.env
     sed -i 's|^CORE_HTTPS_PORT=.*|CORE_HTTPS_PORT=1443|' template.env
     cp template.env .env
+    
+    echo -e "\e[1;34m[INFO] Starting MISP containers...\e[0m"
     sudo docker compose up -d 2>/dev/null
-    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
+    
+    echo -e "\e[1;34m[INFO] Waiting for MariaDB container to be ready...\e[0m"
+    sleep 15
+    
+    # Wait for database to be fully ready
+    echo -e "\e[1;34m[INFO] Checking database readiness...\e[0m"
+    max_attempts=30
+    attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if sudo docker exec misp-docker-db-1 mysqladmin ping -h localhost --silent 2>/dev/null; then
+            echo -e "\e[1;32m[OK] Database is ready!\e[0m"
+            break
+        fi
+        attempt=$((attempt + 1))
+        echo -e "\e[1;33m[WAIT] Attempt $attempt/$max_attempts - Database not ready yet...\e[0m"
+        sleep 2
+    done
+    
+    if [ $attempt -eq $max_attempts ]; then
+        echo -e "\e[1;31m[ERROR] Database failed to start properly.\e[0m"
+        sudo docker logs misp-docker-db-1 --tail 50
+        exit 1
+    fi
+    
+    # Get MySQL password from .env file
+    MYSQL_PASSWORD=$(grep "^MYSQL_PASSWORD=" .env | cut -d'=' -f2)
+    
+    # Fix database user permissions
+    echo -e "\e[1;34m[INFO] Configuring database users and permissions...\e[0m"
+    sudo docker exec -i misp-docker-db-1 mysql -u root -p"$MYSQL_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'misp'@'localhost' IDENTIFIED BY '$MYSQL_PASSWORD';
+CREATE USER IF NOT EXISTS 'misp'@'%' IDENTIFIED BY '$MYSQL_PASSWORD';
+GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'localhost';
+GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'%';
+FLUSH PRIVILEGES;
+EOF
+    
+    if [ $? -eq 0 ]; then
+        echo -e "\e[1;32m[OK] Database users configured successfully.\e[0m"
+    else
+        echo -e "\e[1;31m[ERROR] Failed to configure database users.\e[0m"
+        exit 1
+    fi
+    
+    # Restart MISP containers to apply changes
+    echo -e "\e[1;34m[INFO] Restarting MISP containers...\e[0m"
     sudo docker restart misp-docker-db-1
+    sleep 5
     sudo docker restart misp-docker-misp-core-1
     sudo docker restart misp-docker-misp-modules-1
+    
+    echo -e "\e[1;32mMISP deployment initiated.\e[0m"
+    
     # Check MISP Status
     echo -e "\e[1;34m[INFO] Verifying MISP container status...\e[0m"
     misp_containers=("misp-docker-misp-core-1" "misp-docker-misp-modules-1" "misp-docker-mail-1" "misp-docker-redis-1" "misp-docker-db-1")
@@ -253,8 +307,27 @@ install_module() {
     done
     echo
     echo -e "\e[1;32m MISP deployment is successful and all core containers are running.\e[0m"
-    cd ..
     
+    # Monitor MISP initialization
+    echo -e "\e[1;34m[INFO] Monitoring MISP initialization (this may take 3-5 minutes)...\e[0m"
+    echo -e "\e[1;33m[TIP] You can press Ctrl+C to skip monitoring and continue with the script.\e[0m"
+    
+    # Monitor for database initialization completion
+    timeout=300  # 5 minutes timeout
+    elapsed=0
+    while [ $elapsed -lt $timeout ]; do
+        if sudo docker logs misp-docker-misp-core-1 2>&1 | grep -q "INIT | Database initialized"; then
+            echo -e "\e[1;32m[OK] MISP database initialization completed!\e[0m"
+            break
+        elif sudo docker logs misp-docker-misp-core-1 2>&1 | grep -q "ERROR.*Table.*doesn't exist"; then
+            echo -ne "\e[1;33m[WAIT] Still initializing database schema... ($elapsed seconds elapsed)\r\e[0m"
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo ""  # New line after progress
+    
+    cd ..
 
     echo
     echo -e "\e[1;32m Step 2 Completed: All T-Guard SOC packages have been deployed. \e[0m"
