@@ -25,6 +25,22 @@ print_step_header() {
   echo
 }
 
+die() { echo -e "\e[1;31m[ERROR]\e[0m $*" >&2; exit 1; }
+info() { echo -e "\e[1;34m[INFO]\e[0m  $*"; }
+ok() { echo -e "\e[1;32m[OK]\e[0m    $*"; }
+
+need_dir() { [[ -d "$1" ]] || die "Direktori tidak ditemukan: $1"; }
+need_file() { [[ -f "$1" ]] || die "File tidak ditemukan: $1"; }
+
+backup_if_exists() {
+  local f="$1"
+  if [[ -f "$f" ]]; then
+    local ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    sudo cp -f "$f" "${f}.bak.${ts}"
+    info "Backup dibuat: ${f}.bak.${ts}"
+  fi
+}
 
 # Banner
 print_banner() {
@@ -389,11 +405,8 @@ integrate_module() {
     echo
     info "VirusTotal integration: deploying remove-threat.sh to Manager (via volume) + Agent setup..."
 
-    # 1) Copy remove-threat.sh to Manager active-response bin via etc volume
-    sudo mkdir -p "${VOL_ETC}/active-response/bin"
-    sudo cp -f "${SRC_DIR}/remove-threat.sh" "${VOL_ETC}/active-response/bin/remove-threat.sh"
 
-    # 2) Agent setup: patch USECASE_DIR then append config to host agent ossec.conf
+    # 1) Agent setup: patch USECASE_DIR then append config to host agent ossec.conf
     USECASE_DIR="${ROOT_DIR}/usecase/webdeface"
     AGENT_OSSEC="/var/ossec/etc/ossec.conf"
     AGENT_CFG_TMP="/tmp/add_vtwazuh_config-agent.conf"
@@ -423,15 +436,14 @@ integrate_module() {
         sudo apt -y install jq
     fi
 
-    # Copy remove-threat.sh to host agent active-response bin (optional / safe)
-    if [[ -d "/var/ossec/active-response/bin" ]]; then
-        sudo cp -f "${SRC_DIR}/remove-threat.sh" /var/ossec/active-response/bin/remove-threat.sh
-        sudo chmod 750 /var/ossec/active-response/bin/remove-threat.sh
-        sudo chown root:wazuh /var/ossec/active-response/bin/remove-threat.sh || true
-        ok "remove-threat.sh copied to host agent active-response bin."
-    else
-        info "Folder /var/ossec/active-response/bin tidak ada (host). Lewati copy untuk agent."
-    fi
+    # Copy remove-threat.sh to manager active-response bin (optional / safe)
+    sudo docker cp "${SRC_DIR}/remove-threat.sh" "${MANAGER_CONTAINER}:/var/ossec/active-response/bin/remove-threat.sh" \
+    || die "Gagal docker cp remove-threat.sh ke manager container"
+
+    # Verifikasi singkat
+    sudo docker exec -t "$MANAGER_CONTAINER" ls -lah /var/ossec/active-response/bin/remove-threat.sh >/dev/null 2>&1 \
+    && ok "remove-threat.sh deployed to ${MANAGER_CONTAINER}:/var/ossec/active-response/bin/" \
+    || warn "File belum terverifikasi di path target, cek manual."
 
     # Restart host agent (jika ada)
     if systemctl list-unit-files | grep -q "^wazuh-agent"; then
