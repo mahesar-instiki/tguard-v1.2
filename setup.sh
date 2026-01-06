@@ -365,9 +365,6 @@ EOF
             done
             echo ""
         fi
-    fi
-fi
-
     
     cd ..
 
