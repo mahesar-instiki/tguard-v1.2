@@ -242,28 +242,6 @@ install_module() {
 
     sudo docker compose up -d 2>/dev/null || true
     
-    # Get MySQL password from .env file
-    MYSQL_PASSWORD=$(grep "^MYSQL_PASSWORD=" .env | cut -d'=' -f2)
-    
-    # Fix database user permissions
-    echo -e "\e[1;34m[INFO] Configuring database users and permissions...\e[0m"
-    
-    sudo docker exec -i misp-docker-db-1 mysql -u root -p"$MYSQL_PASSWORD" <<EOF
-CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'misp'@'localhost' IDENTIFIED BY '$MYSQL_PASSWORD';
-CREATE USER IF NOT EXISTS 'misp'@'%' IDENTIFIED BY '$MYSQL_PASSWORD';
-GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'localhost';
-GRANT ALL PRIVILEGES ON misp.* TO 'misp'@'%';
-FLUSH PRIVILEGES;
-EOF
-    
-    if [ $? -eq 0 ]; then
-        echo -e "\e[1;32m[OK] Database users configured successfully.\e[0m"
-    else
-        echo -e "\e[1;31m[ERROR] Failed to configure database users.\e[0m"
-        exit 1
-    fi
-    
     # Restart containers (sesuai versi new script Anda)
     sudo docker restart misp-docker-db-1 || true
     sudo docker restart misp-docker-misp-core-1 || true
