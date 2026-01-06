@@ -343,6 +343,24 @@ integrate_module() {
     read -r -p "Shuffle Webhook URL (FULL, contoh: https://.../hooks/...): " SHUFFLE_WEBHOOK_URL
     read -r -p "VirusTotal API Key: " VT_API_KEY
 
+    # Auto IP untuk default (karena integrate_module bisa dijalankan terpisah dari Step 2)
+    DEFAULT_IP="$(hostname -I | awk '{print $1}')"
+    DEFAULT_MISP_URL="https://${DEFAULT_IP}:1443"
+    DEFAULT_WAZUH_URL="https://${DEFAULT_IP}"
+
+    echo
+    info "Parameter untuk patch custom integrations (Python)."
+
+    read -r -p "MISP Base URL (default: ${DEFAULT_MISP_URL}): " MISP_BASE_URL
+    MISP_BASE_URL="${MISP_BASE_URL:-$DEFAULT_MISP_URL}"
+    MISP_BASE_URL="${MISP_BASE_URL%/}"
+
+    read -r -p "MISP API Key: " MISP_API_KEY
+
+    read -r -p "Wazuh Dashboard URL (default: ${DEFAULT_WAZUH_URL}): " WAZUH_DASHBOARD_URL
+    WAZUH_DASHBOARD_URL="${WAZUH_DASHBOARD_URL:-$DEFAULT_WAZUH_URL}"
+    WAZUH_DASHBOARD_URL="${WAZUH_DASHBOARD_URL%/}"
+
     IRIS_BASE_URL="${IRIS_BASE_URL%/}"
 
     # Backup existing volume files (jika ada)
