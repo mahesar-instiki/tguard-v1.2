@@ -28,6 +28,7 @@ print_step_header() {
 die() { echo -e "\e[1;31m[ERROR]\e[0m $*" >&2; exit 1; }
 info() { echo -e "\e[1;34m[INFO]\e[0m  $*"; }
 ok() { echo -e "\e[1;32m[OK]\e[0m    $*"; }
+warn() { echo -e "\e[1;33m[WARN]\e[0m  $*"; }
 
 need_dir() { [[ -d "$1" ]] || die "Direktori tidak ditemukan: $1"; }
 need_file() { [[ -f "$1" ]] || die "File tidak ditemukan: $1"; }
@@ -300,6 +301,76 @@ install_module() {
 
     ok "Step 2 Completed: All T-Guard SOC packages have been deployed."
 }
+
+restart_selected_containers_ordered() {
+    echo
+    info "Post-Install: Checking & restarting selected containers (ordered)..."
+
+    local containers=(
+        "iriswebapp_app"
+        "iriswebapp_db"
+        "iriswebapp_worker"
+        "misp-docker-db-1"
+        "misp-docker-misp-core-1"
+    )
+
+    # Helper: wait until container is running (and healthy if healthcheck exists)
+    _wait_container_ready() {
+        local c="$1"
+        local i
+        for i in $(seq 1 30); do
+            local running health
+            running="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || echo "false")"
+            health="$(sudo docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealth{{end}}' "$c" 2>/dev/null || echo "unknown")"
+
+            if [[ "$running" == "true" ]]; then
+                # If there's healthcheck, require healthy
+                if [[ "$health" == "nohealth" || "$health" == "healthy" ]]; then
+                    ok "Container ready: $c (running=$running, health=$health)"
+                    return 0
+                fi
+            fi
+
+            sleep 2
+        done
+
+        warn "Container not ready after wait: $c (check logs)."
+        return 1
+    }
+
+    for c in "${containers[@]}"; do
+        echo
+        info "Processing: $c"
+
+        # Check container exists
+        if ! sudo docker inspect "$c" >/dev/null 2>&1; then
+            warn "Container not found, skipping: $c"
+            continue
+        fi
+
+        # Show current state
+        local running status
+        running="$(sudo docker inspect --format='{{.State.Running}}' "$c" 2>/dev/null || echo "false")"
+        status="$(sudo docker inspect --format='{{.State.Status}}' "$c" 2>/dev/null || echo "unknown")"
+        info "Current state: $c (running=$running, status=$status)"
+
+        # Restart or start
+        if [[ "$running" == "true" ]]; then
+            info "Restarting container: $c"
+            sudo docker restart "$c" >/dev/null || die "Failed to restart: $c"
+        else
+            info "Starting container (was not running): $c"
+            sudo docker start "$c" >/dev/null || die "Failed to start: $c"
+        fi
+
+        # Wait ready
+        _wait_container_ready "$c" || true
+    done
+
+    echo
+    ok "Post-Install container restart sequence completed."
+}
+
 
 # =========================
 # Step 3: Integrations (NEW)
